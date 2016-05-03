@@ -13,7 +13,7 @@ project(simavr_js)
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
 
 include_directories(../simavr_emscripten/simavr/sim/)
-set(SOURCE_FILES main.c simulator.h)
+set(SOURCE_FILES main.c simulator.h parts/wdg0151.c parts/wdg0151.h)
 
 if(EMSCRIPTEN)
     add_executable(simavr.js ${SOURCE_FILES})

@@ -8,7 +8,10 @@
 #include <memory.h>
 #include "simulator.h"
 
+#include "parts/wdg0151.h"
+
 avr_t *avr = NULL;
+wdg0151_t glcd;
 
 #define AVR_FREQ 16000000L
 
@@ -60,7 +63,7 @@ char *get_ports() {
 EMSCRIPTEN_KEEPALIVE
 int run() {
     int state;
-    for(int i = 0; i < 64000; i++) {
+    for(int i = 0; i < 100; i++) {
         state = avr_run(avr);
 
         if(state == cpu_Done || state == cpu_Crashed)
@@ -79,15 +82,35 @@ void loop() {
             break;
     }
 
-    printf("terminated\n");
+    printf("i'll be back\n");
 }
 
 #endif
 
+static void glcd_callback() {
+#ifdef EMSCRIPTEN
+    char data[WDG0151_WIDTH*WDG0151_HEIGHT+1];
+    data[WDG0151_WIDTH*WDG0151_HEIGHT] = 0;
+    
+    int i = 0;
+    for(int y = 0; y < WDG0151_HEIGHT; y++) {
+        for(int x = 0; x < WDG0151_WIDTH; x++) {
+            data[i++] = (char)glcd.data[y][x];
+        }
+    }    
+
+    EM_ASM_({
+        glcd_data($0);
+    }, data);
+#else
+    wdg0151_print(glcd);
+#endif
+}
+
 static void load_file(char *filename) {
     elf_firmware_t f;
     ihex_chunk_p chunk = NULL;
-
+   
     int cnt = read_ihex_chunks(filename, &chunk);
     uint32_t loadBase = AVR_SEGMENT_OFFSET_FLASH;
 
@@ -142,6 +165,42 @@ static void load_file(char *filename) {
     }
 
     printf("\n");
+
+    wdg0151_init(avr, &glcd);
+    glcd.cb = &glcd_callback;
+
+    for(int i = 0; i < 8; i++) {
+        avr_irq_t *iavr = avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('A'), i);
+        avr_irq_t *ilcd = glcd.irq + IRQ_WDG0151_D0 + i;
+
+        avr_connect_irq(iavr, ilcd);
+        avr_connect_irq(ilcd, iavr);
+    }
+
+    avr_connect_irq(
+            avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('E'), 2),
+            glcd.irq + IRQ_WDG0151_CS1);
+
+    avr_connect_irq(
+            avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('E'), 3),
+            glcd.irq + IRQ_WDG0151_CS2);
+
+    avr_connect_irq(
+            avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('E'), 4),
+            glcd.irq + IRQ_WDG0151_RS);
+
+    avr_connect_irq(
+            avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('E'), 5),
+            glcd.irq + IRQ_WDG0151_RW);
+
+    avr_connect_irq(
+            avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('E'), 6),
+            glcd.irq + IRQ_WDG0151_E);
+
+    avr_connect_irq(
+            avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ('E'), 7),
+            glcd.irq + IRQ_WDG0151_RST);
+
 }
 
 #ifdef EMSCRIPTEN
