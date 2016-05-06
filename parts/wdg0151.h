@@ -4,7 +4,7 @@
 #include <sim_irq.h>
 #include <stdbool.h>
 
-#define WDG0151_WIDTH 128
+#define WDG0151_WIDTH 64
 #define WDG0151_HEIGHT (64/8)
 
 enum {
@@ -37,6 +37,7 @@ typedef struct wdg0151_ctrl_t {
     uint8_t x_addr;
     uint8_t start;
    
+    uint8_t data[WDG0151_HEIGHT][WDG0151_WIDTH];
 } wdg0151_ctrl_t;
 
 typedef struct wdg0151_t {
@@ -50,8 +51,6 @@ typedef struct wdg0151_t {
     uint16_t pinstate;
    
     void (*cb)(void);
-
-    uint8_t data[WDG0151_HEIGHT][WDG0151_WIDTH];
 } wdg0151_t;
 
 void wdg0151_init(struct avr_t *avr, struct wdg0151_t *wdg);

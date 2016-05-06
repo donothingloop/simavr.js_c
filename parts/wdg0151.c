@@ -5,13 +5,19 @@
 #include <string.h>
 #include <sim_time.h>
 
+#define DEBUG_PRINT printf
+//#define DEBUG_PRINT if(0) printf
+
 void wdg0151_print(struct wdg0151_t *wdg) {
     for(uint8_t y = 0; y < WDG0151_HEIGHT; y++) {
         for(uint8_t x = 0; x < WDG0151_WIDTH; x++) {
-            printf("%u ", wdg->data[y][x]);
+            DEBUG_PRINT("%u ", wdg->ctrl1.data[y][x]);
         }
 
-        printf("\n");
+        for(uint8_t x = 0; x < WDG0151_WIDTH; x++)
+            DEBUG_PRINT("%u ", wdg->ctrl2.data[y][x]);
+
+        DEBUG_PRINT("\n");
     }
 }
 
@@ -32,45 +38,52 @@ static const char* irq_names[IRQ_WDG0151_COUNT] = {
     [IRQ_WDG0151_RST] = "<wdg0151.rst",
 };
 
-static int wdg0151_get_cs(struct wdg0151_t *wdg) {
+static uint8_t wdg0151_get_cs(struct wdg0151_t *wdg) {
+    uint8_t res = 0;
     if(!(wdg->pinstate & (1<<IRQ_WDG0151_CS2)))
-        return 2;
-    else
-        return 1;
-}
-
-static struct wdg0151_ctrl_t* wdg0151_get_ctrl(struct wdg0151_t *wdg) {
-    int ctrl = wdg0151_get_cs(wdg);
-
-    if(ctrl == 1) {
-        return &wdg->ctrl1;
-    } else {
-        return &wdg->ctrl2;
-    }
+        res |= (1<<2);
+   
+    if(!(wdg->pinstate & (1<<IRQ_WDG0151_CS1)))
+        res |= (1<<1);
+    
+    return res;
 }
 
 static avr_cycle_count_t wdg0151_busy_timer(struct avr_t *avr, avr_cycle_count_t when, void *param) {
     struct wdg0151_t *wdg = (struct wdg0151_t*) param;
-    struct wdg0151_ctrl_t *ctrl = wdg0151_get_ctrl(wdg); 
+    uint8_t res = wdg0151_get_cs(wdg);
+    
+    if(res & (1<<1))
+        wdg->ctrl1.busy = false;
+    
+    if(res & (1<<2))
+        wdg->ctrl2.busy = false;
 
-    ctrl->busy = false;
     return 0;
 }
 
 static uint32_t wdg0151_write_data(struct wdg0151_t *wdg) {
     uint32_t delay = 200; // TODO
-    uint8_t shift = 0;
-    struct wdg0151_ctrl_t *ctrl = wdg0151_get_ctrl(wdg); 
-    printf("glcd: write_data (%u): data: %u, x: %u, y: %u\n", wdg0151_get_cs(wdg), wdg->datapins, ctrl->x_addr, ctrl->y_addr);
+    uint8_t cres = wdg0151_get_cs(wdg);
 
-    if(!(wdg->pinstate & (1<<IRQ_WDG0151_CS2)))
-        shift = 64;
-    
-    wdg->data[ctrl->y_addr][ctrl->x_addr + shift] = wdg->datapins;
-    ctrl->x_addr++;
+    if(cres & (1<<1)) {
+        DEBUG_PRINT("glcd: write_data (1): data: %u, x: %u, y: %u\n", wdg->datapins, wdg->ctrl1.x_addr, wdg->ctrl1.y_addr);
+        wdg->ctrl1.data[wdg->ctrl1.y_addr][wdg->ctrl1.x_addr] = wdg->datapins;
+        wdg->ctrl1.x_addr++;
 
-    if(ctrl->x_addr >= 128)
-        ctrl->x_addr = 0;
+        if(wdg->ctrl1.x_addr >= 64)
+            wdg->ctrl1.x_addr = 0;
+    }
+
+    if(cres & (1<<2)) {
+        DEBUG_PRINT("glcd: write_data (2): data: %u, x: %u, y: %u\n", wdg->datapins, wdg->ctrl2.x_addr, wdg->ctrl2.y_addr);
+        wdg->ctrl2.data[wdg->ctrl2.y_addr][wdg->ctrl2.x_addr] = wdg->datapins;
+        wdg->ctrl2.x_addr++;
+
+        if(wdg->ctrl2.x_addr >= 64)
+            wdg->ctrl2.x_addr = 0;
+    }
+
 
     if(wdg->cb)
         wdg->cb();
@@ -80,32 +93,75 @@ static uint32_t wdg0151_write_data(struct wdg0151_t *wdg) {
 
 static uint32_t wdg0151_write_instruction(struct wdg0151_t *wdg) {
     uint32_t delay = 200; // TODO
-    struct wdg0151_ctrl_t *ctrl = wdg0151_get_ctrl(wdg); 
-    
+    uint8_t cres = wdg0151_get_cs(wdg);    
+
     if((wdg->pinstate & (1<<IRQ_WDG0151_D6)) && !(wdg->pinstate & (1<<IRQ_WDG0151_D7))) {
         // Y address
         uint8_t y = wdg->datapins & 0x3F;
-        printf("glcd: write_instruction: y_addr: %u\n", y);
-        ctrl->x_addr = y;
+        if(cres & (1<<1)) {
+            wdg->ctrl1.x_addr = y;
+            printf("glcd: write_instruction (1): x_addr: %u\n", y);
+        }
+
+        if(cres & (1<<2)) {
+            wdg->ctrl2.x_addr = y;
+            printf("glcd: write_instruction (2): x_addr: %u\n", y);
+        }
+
     } else if((wdg->pinstate & (1<<IRQ_WDG0151_D7)) && (wdg->pinstate & (1<<IRQ_WDG0151_D6))) {
         // start line
         uint8_t start = wdg->datapins & 0x3F;
-        printf("glcd: write_instruction: start: %u\n", start);
-        ctrl->start = start;
-        printf("glcd: Using unsupported feature startline!\n");
+    
+        if(cres & (1<<1)) {
+            wdg->ctrl1.start = start;
+            printf("glcd: write_instruction (1): start: %u\n", start);
+        }
+
+        if(cres & (1<<2)) {
+            printf("glcd: write_instruction (2): start: %u\n", start);
+            wdg->ctrl2.start = start;;
+        }
+
+        DEBUG_PRINT("glcd: Using unsupported feature startline!\n");
     } else if((wdg->pinstate & (1<<IRQ_WDG0151_D7)) && !(wdg->pinstate & (1<<IRQ_WDG0151_D6))) {
         // X address
         uint8_t x = wdg->datapins & 0x7;
-        printf("glcd: write_instruction: x_addr: %u\n", x);
-        ctrl->y_addr = x;
+        
+        if(cres & (1<<1)) {
+            printf("glcd: write_instruction (1): y_addr: %u\n", x);
+            wdg->ctrl1.y_addr = x;
+        }
+
+        if(cres & (1<<2)) {
+            printf("glcd: write_instruction (2): y_addr: %u\n", x);
+            wdg->ctrl2.y_addr = x;
+        }
+
     } else if(!(wdg->pinstate & (1<<IRQ_WDG0151_D7)) && !(wdg->pinstate & (1<<IRQ_WDG0151_D6))) {
         // on/off
         if(wdg->pinstate & (1<<IRQ_WDG0151_D0)) {
-            printf("glcd: write_instruction: on\n");
-            ctrl->enabled = true;
+            if(cres & (1<<1)) {
+                printf("glcd: write_instruction (1): on\n");
+                wdg->ctrl1.enabled = true;
+            }
+
+            if(cres & (1<<2)) {
+                printf("glcd: write_instruction (2): on\n");
+                wdg->ctrl2.enabled = true;
+            }
+
         } else {
-            printf("glcd: write_instruction: off\n");
-            ctrl->enabled = false;
+            if(cres & (1<<1)) {
+                printf("glcd: write_instruction (1): off\n");
+                wdg->ctrl1.enabled = false;
+            }
+
+            if(cres & (1<<2)) {
+                printf("glcd: write_instruction (2): off\n");
+                wdg->ctrl2.enabled = false;
+            }
+
+
         }
     }
 
@@ -113,9 +169,14 @@ static uint32_t wdg0151_write_instruction(struct wdg0151_t *wdg) {
 }
 
 static uint32_t wdg0151_process_write(struct wdg0151_t *wdg) {
-    struct wdg0151_ctrl_t *ctrl = wdg0151_get_ctrl(wdg); 
     wdg->datapins = ((wdg->pinstate>>IRQ_WDG0151_D0) & 0xFF);
-    ctrl->dummy = 1;
+    uint8_t cres = wdg0151_get_cs(wdg);
+
+    if(cres & (1<<1))
+        wdg->ctrl1.dummy = 1;
+
+    if(cres & (1<<2))
+        wdg->ctrl2.dummy = 1;
 
     int delay = 0;
     if(wdg->pinstate & (1<<IRQ_WDG0151_RS))
@@ -136,29 +197,51 @@ static void wdg0151_write_datapins(struct wdg0151_t *wdg, uint8_t data) {
 
 static uint32_t wdg0151_process_read(struct wdg0151_t *wdg) {
     uint32_t delay = 500;
-    struct wdg0151_ctrl_t *ctrl = wdg0151_get_ctrl(wdg); 
+    uint8_t cres = wdg0151_get_cs(wdg);
 
     if(wdg->pinstate & (1<<IRQ_WDG0151_RS)) {
-        uint8_t shift = 0;
+        if(cres & (1<<1)) { 
+            if(wdg->ctrl1.dummy) {
+                DEBUG_PRINT("glcd: read_data (1): dummy read\n");
+                wdg->ctrl1.dummy--;
+            } else {
+                DEBUG_PRINT("glcd: read_data (1): %u\n", wdg->ctrl1.data[wdg->ctrl1.y_addr][wdg->ctrl1.x_addr]);
+                wdg0151_write_datapins(wdg, wdg->ctrl1.data[wdg->ctrl1.y_addr][wdg->ctrl1.x_addr]);
+                wdg->ctrl1.x_addr++;
 
-        if(!(wdg->pinstate & (1<<IRQ_WDG0151_CS2)))
-            shift = 64;
- 
-        if(ctrl->dummy) {
-            printf("glcd: read_data: dummy read\n");
-            ctrl->dummy--;
-        } else {
-            printf("glcd: read_data: %u\n", wdg->data[ctrl->y_addr][ctrl->x_addr + shift]);
-            wdg0151_write_datapins(wdg, wdg->data[ctrl->y_addr][ctrl->x_addr + shift]);
-            ctrl->x_addr++;
-
-            if(ctrl->x_addr >= 128)
-                ctrl->x_addr = 0;
+                if(wdg->ctrl1.x_addr >= 64)
+                    wdg->ctrl1.x_addr = 0;
+            }
         }
+
+        if(cres & (1<<2)) { 
+            if(wdg->ctrl2.dummy) {
+                DEBUG_PRINT("glcd: read_data (2): dummy read\n");
+                wdg->ctrl2.dummy--;
+            } else {
+                DEBUG_PRINT("glcd: read_data (2): %u\n", wdg->ctrl2.data[wdg->ctrl2.y_addr][wdg->ctrl2.x_addr]);
+                wdg0151_write_datapins(wdg, wdg->ctrl2.data[wdg->ctrl2.y_addr][wdg->ctrl2.x_addr]);
+                wdg->ctrl2.x_addr++;
+
+                if(wdg->ctrl2.x_addr >= 64)
+                    wdg->ctrl2.x_addr = 0;
+            }
+        }
+
        
     } else {
-        printf("glcd: read_status (%u): reset: %u, enabled: %u, busy:%u\n", wdg0151_get_cs(wdg), ctrl->reset, ctrl->enabled, ctrl->busy); 
-        uint8_t data = 0 | (ctrl->reset<<4) | (ctrl->enabled<<5) | (ctrl->busy<<7);
+        uint8_t data;
+        
+        if(cres & (1<<1)) {
+            DEBUG_PRINT("glcd: read_status (1): reset: %u, enabled: %u, busy:%u\n", wdg->ctrl1.reset, wdg->ctrl1.enabled, wdg->ctrl1.busy);
+            data = 0 | (wdg->ctrl1.reset<<4) | (wdg->ctrl1.enabled<<5) | (wdg->ctrl1.busy<<7);
+        }
+
+        if(cres & (1<<2)) {
+            DEBUG_PRINT("glcd: read_status (2): reset: %u, enabled: %u, busy:%u\n", wdg->ctrl2.reset, wdg->ctrl2.enabled, wdg->ctrl2.busy);
+            data = 0 | (wdg->ctrl2.reset<<4) | (wdg->ctrl2.enabled<<5) | (wdg->ctrl2.busy<<7);
+        }
+
         wdg0151_write_datapins(wdg, data);
     }
 
@@ -167,9 +250,13 @@ static uint32_t wdg0151_process_read(struct wdg0151_t *wdg) {
 
 static avr_cycle_count_t wdg0151_process_e_pinchange(struct avr_t *avr, avr_cycle_count_t when, void *param) {
     struct wdg0151_t *wdg = (struct wdg0151_t*) param;
-    struct wdg0151_ctrl_t *ctrl = wdg0151_get_ctrl(wdg); 
+    uint8_t cres = wdg0151_get_cs(wdg);
 
-    ctrl->reentrant = true;
+    if(cres & (1<<1))
+        wdg->ctrl1.reentrant = true;
+
+    if(cres & (1<<2))
+        wdg->ctrl2.reentrant = true;
 
     int delay = 0;
     
@@ -179,11 +266,20 @@ static avr_cycle_count_t wdg0151_process_e_pinchange(struct avr_t *avr, avr_cycl
         delay = wdg0151_process_read(wdg);
 
     if(delay) {
-        ctrl->busy = true;
+        if(cres & (1<<1))
+            wdg->ctrl1.busy = true;
+
+        if(cres & (1<<2))
+            wdg->ctrl2.busy = true;
+
         avr_cycle_timer_register_usec(wdg->avr, delay, wdg0151_busy_timer, wdg);
     }
 
-    ctrl->reentrant = false;    
+    if(cres & (1<<1))
+        wdg->ctrl1.reentrant = false;
+
+    if(cres & (1<<2))
+        wdg->ctrl2.reentrant = false;
 
     return delay;
 }

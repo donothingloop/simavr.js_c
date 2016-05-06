@@ -63,7 +63,7 @@ char *get_ports() {
 EMSCRIPTEN_KEEPALIVE
 int run() {
     int state;
-    for(int i = 0; i < 100; i++) {
+    for(int i = 0; i < 5000; i++) {
         state = avr_run(avr);
 
         if(state == cpu_Done || state == cpu_Crashed)
@@ -95,7 +95,13 @@ static void glcd_callback() {
     int i = 0;
     for(int y = 0; y < WDG0151_HEIGHT; y++) {
         for(int x = 0; x < WDG0151_WIDTH; x++) {
-            data[i++] = (char)glcd.data[y][x];
+            data[i++] = (char)glcd.ctrl1.data[y][x];
+        }
+    }    
+
+    for(int y = 0; y < WDG0151_HEIGHT; y++) {
+        for(int x = 0; x < WDG0151_WIDTH; x++) {
+            data[i++] = (char)glcd.ctrl2.data[y][x];
         }
     }    
 
@@ -103,7 +109,7 @@ static void glcd_callback() {
         glcd_data($0);
     }, data);
 #else
-    wdg0151_print(glcd);
+    wdg0151_print(&glcd);
 #endif
 }
 
